@@ -1,5 +1,4 @@
-import fs from 'fs/promises'
-import path from 'path'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
 export interface StorageProvider {
   put(key: string, data: Buffer, contentType: string): Promise<string>
@@ -9,50 +8,74 @@ export interface StorageProvider {
   getPublicUrl(key: string): string
 }
 
-export class LocalStorageProvider implements StorageProvider {
-  private basePath: string
+export class SupabaseStorageProvider implements StorageProvider {
+  private client: SupabaseClient
+  private bucket: string
 
-  constructor(basePath?: string) {
-    this.basePath = basePath || path.resolve(process.cwd(), 'storage')
+  constructor() {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    this.bucket = process.env.SUPABASE_STORAGE_BUCKET || 'cardrank'
+
+    if (!url || !key) {
+      throw new Error(
+        'Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables'
+      )
+    }
+
+    this.client = createClient(url, key)
   }
 
-  async put(key: string, data: Buffer, _contentType: string): Promise<string> {
-    const filePath = path.join(this.basePath, key)
-    const dir = path.dirname(filePath)
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(filePath, data)
+  async put(key: string, data: Buffer, contentType: string): Promise<string> {
+    const { error } = await this.client.storage
+      .from(this.bucket)
+      .upload(key, data, {
+        contentType,
+        upsert: true,
+      })
+
+    if (error) {
+      throw new Error(`Storage upload failed: ${error.message}`)
+    }
+
     return this.getPublicUrl(key)
   }
 
   async get(key: string): Promise<Buffer | null> {
-    const filePath = path.join(this.basePath, key)
-    try {
-      return await fs.readFile(filePath)
-    } catch {
+    const { data, error } = await this.client.storage
+      .from(this.bucket)
+      .download(key)
+
+    if (error) {
       return null
     }
+
+    const arrayBuffer = await data.arrayBuffer()
+    return Buffer.from(arrayBuffer)
   }
 
   async delete(key: string): Promise<void> {
-    const filePath = path.join(this.basePath, key)
-    try {
-      await fs.unlink(filePath)
-    } catch {
-      // Ignore errors if file doesn't exist
-    }
+    await this.client.storage.from(this.bucket).remove([key])
   }
 
   async deletePrefix(prefix: string): Promise<void> {
-    const dirPath = path.join(this.basePath, prefix)
-    try {
-      await fs.rm(dirPath, { recursive: true, force: true })
-    } catch {
-      // Ignore errors if directory doesn't exist
+    // List all files under the prefix, then delete them in batches
+    const { data: files } = await this.client.storage
+      .from(this.bucket)
+      .list(prefix, { limit: 1000 })
+
+    if (files && files.length > 0) {
+      const paths = files.map((f) => `${prefix}/${f.name}`)
+      await this.client.storage.from(this.bucket).remove(paths)
     }
   }
 
   getPublicUrl(key: string): string {
-    return `/api/images/${key}`
+    const { data } = this.client.storage
+      .from(this.bucket)
+      .getPublicUrl(key)
+
+    return data.publicUrl
   }
 }
 
@@ -60,15 +83,7 @@ let storageInstance: StorageProvider | null = null
 
 export function getStorage(): StorageProvider {
   if (!storageInstance) {
-    const provider = process.env.STORAGE_PROVIDER || 'local'
-
-    switch (provider) {
-      case 'local':
-      default:
-        storageInstance = new LocalStorageProvider()
-        break
-    }
+    storageInstance = new SupabaseStorageProvider()
   }
-
   return storageInstance
 }
