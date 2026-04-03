@@ -1,0 +1,138 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Game {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  sets Set[]
+
+  @@map("games")
+}
+
+model Set {
+  id                  String   @id @default(uuid())
+  gameId              String   @map("game_id")
+  name                String
+  slug                String   @unique
+  description         String?  @db.Text
+  votingOpen          Boolean  @default(true) @map("voting_open")
+  defaultShowMetadata Boolean  @default(false) @map("default_show_metadata")
+  minVoteThreshold    Int      @default(10) @map("min_vote_threshold")
+  balanceZoneSd       Float    @default(1.5) @map("balance_zone_sd")
+  voterLimit          Int?     @map("voter_limit")
+  whyTagsEnabled      Boolean  @default(true) @map("why_tags_enabled")
+  whyTagLabels        String[] @default(["Better stats", "Better ability", "Better synergy", "Better cost", "Just stronger overall"]) @map("why_tag_labels")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  game          Game           @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  cards         Card[]
+  votes         Vote[]
+  voterSessions VoterSession[]
+
+  @@index([gameId])
+  @@map("sets")
+}
+
+model Card {
+  id              String   @id @default(uuid())
+  setId           String   @map("set_id")
+  name            String
+  rarity          String
+  cardType        String   @map("card_type")
+  imageFilename   String   @map("image_filename")
+  imageUrl        String   @map("image_url")
+  thumbnailLg     String?  @map("thumbnail_lg")
+  thumbnailSm     String?  @map("thumbnail_sm")
+  eloRating       Float    @default(1500) @map("elo_rating")
+  importedRating  Float?   @map("imported_rating")
+  comparisonCount Int      @default(0) @map("comparison_count")
+  winCount        Int      @default(0) @map("win_count")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  set           Set                  @relation(fields: [setId], references: [id], onDelete: Cascade)
+  votesAsA      Vote[]               @relation("CardA")
+  votesAsB      Vote[]               @relation("CardB")
+  votesAsWinner Vote[]               @relation("Winner")
+  snapshots     CardRatingSnapshot[]
+
+  @@unique([setId, imageFilename])
+  @@index([setId])
+  @@index([setId, eloRating])
+  @@index([setId, rarity])
+  @@map("cards")
+}
+
+model Vote {
+  id             String   @id @default(uuid())
+  setId          String   @map("set_id")
+  cardAId        String   @map("card_a_id")
+  cardBId        String   @map("card_b_id")
+  winnerId       String?  @map("winner_id")
+  voterSessionId String   @map("voter_session_id")
+  decisionTimeMs Int?     @map("decision_time_ms")
+  cardAPreElo    Float    @map("card_a_pre_elo")
+  cardBPreElo    Float    @map("card_b_pre_elo")
+  whyTag         String?  @map("why_tag")
+  undone         Boolean  @default(false)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  set          Set                  @relation(fields: [setId], references: [id], onDelete: Cascade)
+  cardA        Card                 @relation("CardA", fields: [cardAId], references: [id], onDelete: Cascade)
+  cardB        Card                 @relation("CardB", fields: [cardBId], references: [id], onDelete: Cascade)
+  winner       Card?                @relation("Winner", fields: [winnerId], references: [id], onDelete: SetNull)
+  voterSession VoterSession         @relation(fields: [voterSessionId], references: [id])
+  snapshots    CardRatingSnapshot[]
+
+  @@index([setId])
+  @@index([setId, createdAt])
+  @@index([voterSessionId])
+  @@index([cardAId])
+  @@index([cardBId])
+  @@index([setId, undone])
+  @@map("votes")
+}
+
+model VoterSession {
+  id           String   @id @default(uuid())
+  setId        String   @map("set_id")
+  rarityFilter String[] @map("rarity_filter")
+  typeFilter   String[] @map("type_filter")
+  showMetadata Boolean  @default(false) @map("show_metadata")
+  votesCast    Int      @default(0) @map("votes_cast")
+  createdAt    DateTime @default(now()) @map("created_at")
+  lastActive   DateTime @default(now()) @map("last_active")
+
+  set   Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
+  votes Vote[]
+
+  @@index([setId])
+  @@map("voter_sessions")
+}
+
+model CardRatingSnapshot {
+  id        String   @id @default(uuid())
+  cardId    String   @map("card_id")
+  voteId    String   @map("vote_id")
+  eloRating Float    @map("elo_rating")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  vote Vote @relation(fields: [voteId], references: [id], onDelete: Cascade)
+
+  @@index([cardId, createdAt])
+  @@map("card_rating_snapshots")
+}
